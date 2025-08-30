@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Travel Buddy</title>
+    <style>
+      body {
+        font:
+          16px/1.4 system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+        margin: 2rem;
+      }
+      form {
+        display: grid;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        max-width: 520px;
+      }
+      label {
+        font-weight: 600;
+      }
+      input,
+      select,
+      button {
+        padding: 0.6rem 0.7rem;
+        font: inherit;
+      }
+      .row {
+        display: grid;
+        gap: 0.5rem;
+        grid-template-columns: 1fr auto;
+        align-items: end;
+      }
+      .card {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
+        margin: 0.6rem 0;
+      }
+      .muted {
+        color: #666;
+        font-size: 0.9em;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Flight & Airport Lookup</h1>
+
+    <form id="flightForm">
+      <label for="flightCmd">Flight search</label>
+      <div class="row">
+        <select id="flightCmd">
+          <option value="flight_iata">By flight number (IATA)</option>
+          <option value="arr_iata">Arrivals by airport (IATA)</option>
+          <option value="dep_iata">Departures by airport (IATA)</option>
+        </select>
+        <input id="flightArg" placeholder="e.g. BA283 or LHR" required />
+        <button type="submit">Search flights</button>
+      </div>
+      <div class="muted">
+        Examples: <span class="mono">BA283</span>, <span class="mono">LHR</span>
+      </div>
+    </form>
+
+    <form id="airportForm">
+      <label for="airportArg">Airport lookup</label>
+      <div class="row">
+        <input
+          id="airportArg"
+          placeholder="IATA, ICAO, or name (e.g. heathrow)"
+        />
+        <button type="submit">Search airports</button>
+      </div>
+      <div class="muted">Tries IATA (3), then ICAO (4), then free-text.</div>
+    </form>
+
+    <div id="out"></div>
+
+    <script>
+      const out = document.getElementById("out");
+
+      function clearOut() {
+        out.innerHTML = "";
+      }
+      function card(html) {
+        const div = document.createElement("div");
+        div.className = "card";
+        div.innerHTML = html;
+        out.appendChild(div);
+      }
+      function errCard(message) {
+        card(`<strong>Error</strong><div class="muted">${message}</div>`);
+      }
+
+      function renderFlights(data) {
+        const flights = (data && data.data) || [];
+        if (flights.length === 0) {
+          card("No results.");
+          return;
+        }
+        for (const f of flights) {
+          const fl = (f.flight && (f.flight.iata || f.flight.number)) || "N/A";
+          const al =
+            (f.airline && (f.airline.name || f.airline.iata)) ||
+            "Unknown Airline";
+          const dep = f.departure || {};
+          const arr = f.arrival || {};
+          const ac = f.aircraft || {};
+          const status = f.status || "unknown";
+
+          card(`
+          <div><strong>${fl}</strong> • ${al} • status: ${status}</div>
+          <div>From: ${dep.airport || dep.iata || "—"}
+            &nbsp;|&nbsp; sched: ${dep.scheduled || "—"}
+            &nbsp;|&nbsp; est: ${dep.estimated || "—"}
+            &nbsp;|&nbsp; T${dep.terminal || "—"} G${dep.gate || "—"}
+            &nbsp;|&nbsp; delay: ${dep.delay ?? 0}m
+          </div>
+          <div>To:&nbsp;&nbsp;&nbsp; ${arr.airport || arr.iata || "—"}
+            &nbsp;|&nbsp; sched: ${arr.scheduled || "—"}
+            &nbsp;|&nbsp; est: ${arr.estimated || "—"}
+            &nbsp;|&nbsp; T${arr.terminal || "—"} G${arr.gate || "—"}
+            &nbsp;|&nbsp; delay: ${arr.delay ?? 0}m
+          </div>
+          ${
+            ac.registration || ac.iata || ac.icao
+              ? `<div class="muted">Aircraft: reg ${ac.registration || "—"} • type IATA ${ac.iata || "—"} / ICAO ${ac.icao || "—"}</div>`
+              : ""
+          }
+        `);
+        }
+      }
+
+      function renderAirports(data) {
+        const airports = (data && data.data) || [];
+        if (airports.length === 0) {
+          card("No results.");
+          return;
+        }
+        for (const a of airports) {
+          const name = a.airport_name || a.airport || "Unknown airport";
+          const iata = a.iata_code || "—";
+          const icao = a.icao_code || "—";
+          const city = a.city || a.city_name || a.city_iata_code || "";
+          const country = a.country_name || a.country_iso2 || "";
+          const tz = a.timezone || a.timezone_gmt || "";
+          const lat = a.latitude,
+            lon = a.longitude;
+
+          card(`
+          <strong>${name}</strong> (${iata}/${icao})
+          <div class="muted">${[city, country].filter(Boolean).join(", ")}</div>
+          ${tz ? `<div class="muted">TZ: ${tz}</div>` : ""}
+          ${lat != null && lon != null ? `<div class="muted">Coords: ${lat}, ${lon}</div>` : ""}
+        `);
+        }
+      }
+
+      async function requestJson(url) {
+        const r = await fetch(url);
+        const type = r.headers.get("content-type") || "";
+        const text = await r.text();
+        if (!r.ok) throw new Error(text || r.statusText);
+        try {
+          return type.includes("application/json") ? JSON.parse(text) : text;
+        } catch {
+          return text;
+        }
+      }
+
+      // Flights form
+      document
+        .getElementById("flightForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          clearOut();
+          const key = document.getElementById("flightCmd").value;
+          const val = document.getElementById("flightArg").value.trim();
+          if (!val) return;
+          try {
+            const url = `/api/flights?${new URLSearchParams({ [key]: val, limit: "20", offset: "0" })}`;
+            const data = await requestJson(url);
+            renderFlights(data);
+          } catch (err) {
+            errCard(err.message || String(err));
+          }
+        });
+
+      // Airports form
+      document
+        .getElementById("airportForm")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          clearOut();
+          const arg = document.getElementById("airportArg").value.trim();
+          if (!arg) return;
+          try {
+            // Decide IATA (3), ICAO (4), else free text search
+            let params;
+            if (/^[a-z]{3}$/i.test(arg))
+              params = { iata_code: arg.toUpperCase() };
+            else if (/^[a-z]{4}$/i.test(arg))
+              params = { icao_code: arg.toUpperCase() };
+            else params = { search: arg }; // requires Basic+ plan
+            const url = `/api/airports?${new URLSearchParams(params)}`;
+            const data = await requestJson(url);
+            renderAirports(data);
+          } catch (err) {
+            errCard(err.message || String(err));
+          }
+        });
+    </script>
+  </body>
+</html>
